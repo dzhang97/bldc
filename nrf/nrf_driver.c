@@ -1,5 +1,6 @@
 /*
 	Copyright 2016 Benjamin Vedder	benjamin@vedder.se
+	Copyright 2017 Nico Ackermann	increased stack size of thread
 
 	This file is part of the VESC firmware.
 
@@ -36,7 +37,7 @@
 #define NRF_RESTART_TIMEOUT		500  // Restart the NRF if nothing has been received or acked for this time
 
 // Variables
-static THD_WORKING_AREA(rx_thread_wa, 2048);
+static THD_WORKING_AREA(rx_thread_wa, 3072);
 static THD_WORKING_AREA(tx_thread_wa, 512);
 static mote_state mstate;
 static uint8_t rx_buffer[RX_BUFFER_SIZE];

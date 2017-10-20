@@ -1,5 +1,6 @@
 /*
 	Copyright 2016 Benjamin Vedder	benjamin@vedder.se
+	Copyright 2017 Nico Ackermann added additional throttle curve
 
 	This file is part of the VESC firmware.
 
@@ -569,7 +570,26 @@ float utils_throttle_curve(float val, float curve_acc, float curve_brake, int mo
 		} else {
 			ret = powf(val_a, 1.0 - curve);
 		}
-	} else if (mode == 1) { // Natural
+	} else if (mode == 1) { // Expo - Natural
+		float first;
+		if (curve >= 0.0) {
+			first = 1.0 - powf(1.0 - val_a, 1.0 + curve);
+		} else {
+			first = powf(val_a, 1.0 - curve);
+		}
+		
+		float second;
+		if (fabsf(curve) < 1e-10) {
+			second = val_a;
+		} else {
+			if (curve >= 0.0) {
+				second = 1.0 - ((expf(curve * (1.0 - val_a)) - 1.0) / (expf(curve) - 1.0));
+			} else {
+				second = (expf(-curve * val_a) - 1.0) / (expf(-curve) - 1.0);
+			}
+		}
+		ret = (first + second) / 2.0;
+	} else if (mode == 2) { // Natural
 		if (fabsf(curve) < 1e-10) {
 			ret = val_a;
 		} else {
@@ -579,7 +599,7 @@ float utils_throttle_curve(float val, float curve_acc, float curve_brake, int mo
 				ret = (expf(-curve * val_a) - 1.0) / (expf(-curve) - 1.0);
 			}
 		}
-	} else if (mode == 2) { // Polynomial
+	} else if (mode == 3) { // Polynomial
 		if (curve >= 0.0) {
 			ret = 1.0 - ((1.0 - val_a) / (1.0 + curve * val_a));
 		} else {

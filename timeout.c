@@ -1,5 +1,6 @@
 /*
 	Copyright 2016 Benjamin Vedder	benjamin@vedder.se
+	Copyright 2017 Nico Ackermann	added current ramping to to timeout and fuction to fire it
 
 	This file is part of the VESC firmware.
 
@@ -19,12 +20,15 @@
 
 #include "timeout.h"
 #include "mc_interface.h"
+#include "utils.h"
+#include <math.h>
 
 // Private variables
 static volatile systime_t timeout_msec;
 static volatile systime_t last_update_time;
 static volatile float timeout_brake_current;
 static volatile bool has_timeout;
+static volatile bool fire_timeout;
 
 // Threads
 static THD_WORKING_AREA(timeout_thread_wa, 512);
@@ -34,7 +38,8 @@ void timeout_init(void) {
 	timeout_msec = 1000;
 	last_update_time = 0;
 	timeout_brake_current = 0.0;
-	has_timeout = false;
+	has_timeout = true;
+	fire_timeout = false;
 
 	chThdCreateStatic(timeout_thread_wa, sizeof(timeout_thread_wa), NORMALPRIO, timeout_thread, NULL);
 }
@@ -46,6 +51,11 @@ void timeout_configure(systime_t timeout, float brake_current) {
 
 void timeout_reset(void) {
 	last_update_time = chVTGetSystemTime();
+	fire_timeout = false;
+}
+
+void timeout_fire(void) {
+	fire_timeout = true;
 }
 
 bool timeout_has_timeout(void) {
@@ -66,9 +76,42 @@ static THD_FUNCTION(timeout_thread, arg) {
 	chRegSetThreadName("Timeout");
 
 	for(;;) {
-		if (timeout_msec != 0 && chVTTimeElapsedSinceX(last_update_time) > MS2ST(timeout_msec)) {
+		if (timeout_msec != 0 && (chVTTimeElapsedSinceX(last_update_time) > MS2ST(timeout_msec) || fire_timeout)) {
 			mc_interface_unlock();
-			mc_interface_set_brake_current(timeout_brake_current);
+			
+			static float current = 0.0;
+			static float direction = 0.0;
+			static int stoppedCounter = 0;
+			
+			if(!has_timeout){
+				// to know if drawing or generating and how much
+				current = mc_interface_get_tot_current();
+				// to know in which direction the motor goes
+				direction = mc_interface_get_tot_current_directional();
+				stoppedCounter = 1000;
+			}
+			
+			if (stoppedCounter != 0) {
+			
+				if (fabsf(mc_interface_get_rpm()) < 250.0) {
+					stoppedCounter -= 10;
+				} else {
+					stoppedCounter = 1000;
+				}
+						
+				const float ramp_step = ((current < 0.0 && -timeout_brake_current > current) || (current > 0.0 && -timeout_brake_current < current)) ? 0.5 : 0.2;
+
+				utils_step_towards(&current, -timeout_brake_current, ramp_step);
+			
+				if (current > 0.0) {
+					mc_interface_set_current(SIGN(direction) * current);
+				}else{
+					mc_interface_set_brake_current(current);
+				}
+			} else {
+				mc_interface_set_current(0.0);
+			}
+			
 			has_timeout = true;
 		} else {
 			has_timeout = false;

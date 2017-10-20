@@ -1,5 +1,10 @@
 /*
 	Copyright 2016 Benjamin Vedder	benjamin@vedder.se
+	Copyright 2017 Nico Ackermann	added cruise control status and handling and changed speed control calculation,
+									changed current limit truncation,
+									changed logic for observer update calculation but not the calculation,
+									added all parameters to mcpwm_foc_print_state,
+									check if values are NaN after false initialisation
 
 	This file is part of the VESC firmware.
 
@@ -16,6 +21,10 @@
     You should have received a copy of the GNU General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
     */
+
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 
 #include "mcpwm_foc.h"
 #include "mc_interface.h"
@@ -89,6 +98,7 @@ static volatile bool m_dccal_done;
 static volatile bool m_output_on;
 static volatile float m_pos_pid_set;
 static volatile float m_speed_pid_set_rpm;
+static volatile ppm_cruise m_speed_pid_cruise_control_type;
 static volatile float m_phase_now_observer;
 static volatile float m_phase_now_observer_override;
 static volatile bool m_phase_observer_override;
@@ -211,6 +221,7 @@ void mcpwm_foc_init(volatile mc_configuration *configuration) {
 	m_output_on = false;
 	m_pos_pid_set = 0.0;
 	m_speed_pid_set_rpm = 0.0;
+	m_speed_pid_cruise_control_type = CRUISE_CONTROL_MOTOR_SETTINGS;
 	m_phase_now_observer = 0.0;
 	m_phase_now_observer_override = 0.0;
 	m_phase_observer_override = false;
@@ -540,7 +551,18 @@ void mcpwm_foc_set_duty_noramp(float dutyCycle) {
 void mcpwm_foc_set_pid_speed(float rpm) {
 	m_control_mode = CONTROL_MODE_SPEED;
 	m_speed_pid_set_rpm = rpm;
+	m_speed_pid_cruise_control_type = CRUISE_CONTROL_MOTOR_SETTINGS;
 
+	if (m_state != MC_STATE_RUNNING) {
+		m_state = MC_STATE_RUNNING;
+	}
+}
+
+void mcpwm_foc_set_pid_speed_with_cruise_status(float rpm, ppm_cruise cruise_status) {
+	m_control_mode = CONTROL_MODE_SPEED;
+	m_speed_pid_set_rpm = rpm;
+	m_speed_pid_cruise_control_type = cruise_status;
+	
 	if (m_state != MC_STATE_RUNNING) {
 		m_state = MC_STATE_RUNNING;
 	}
@@ -577,8 +599,13 @@ void mcpwm_foc_set_current(float current) {
 		stop_pwm_hw();
 		return;
 	}
-
-	utils_truncate_number(&current, -m_conf->l_current_max, m_conf->l_current_max);
+	
+	// truncate by the higher value because it also could mean accelerate reverse
+	if(m_conf->l_current_max > -m_conf->l_current_min){
+		utils_truncate_number(&current, -m_conf->l_current_max, m_conf->l_current_max);
+	}else{
+		utils_truncate_number(&current, m_conf->l_current_min, -m_conf->l_current_min);
+	}
 
 	m_control_mode = CONTROL_MODE_CURRENT;
 	m_iq_set = current;
@@ -603,7 +630,7 @@ void mcpwm_foc_set_brake_current(float current) {
 		return;
 	}
 
-	utils_truncate_number(&current, -m_conf->l_current_max, m_conf->l_current_max);
+	utils_truncate_number(&current, m_conf->l_current_min, -m_conf->l_current_min);
 
 	m_control_mode = CONTROL_MODE_CURRENT_BRAKE;
 	m_iq_set = current;
@@ -628,7 +655,7 @@ void mcpwm_foc_set_handbrake(float current) {
 		return;
 	}
 
-	utils_truncate_number(&current, -m_conf->l_current_max, m_conf->l_current_max);
+	utils_truncate_number(&current, m_conf->l_current_min, -m_conf->l_current_min);
 
 	m_control_mode = CONTROL_MODE_HANDBRAKE;
 	m_iq_set = current;
@@ -1438,7 +1465,7 @@ bool mcpwm_foc_hall_detect(float current, uint8_t *hall_table) {
 }
 
 void mcpwm_foc_print_state(void) {
-	commands_printf("Mod d:        %.2f", (double)m_motor_state.mod_d);
+	/*commands_printf("Mod d:        %.2f", (double)m_motor_state.mod_d);
 	commands_printf("Mod q:        %.2f", (double)m_motor_state.mod_q);
 	commands_printf("Duty:         %.2f", (double)m_motor_state.duty_now);
 	commands_printf("Vd:           %.2f", (double)m_motor_state.vd);
@@ -1453,7 +1480,33 @@ void mcpwm_foc_print_state(void) {
 	commands_printf("id_target:    %.2f", (double)m_motor_state.id_target);
 	commands_printf("iq_target:    %.2f", (double)m_motor_state.iq_target);
 	commands_printf("i_abs:        %.2f", (double)m_motor_state.i_abs);
+	commands_printf("i_abs_filter: %.2f", (double)m_motor_state.i_abs_filter);*/
+	
+	commands_printf("id_target:    %.2f", (double)m_motor_state.id_target);
+	commands_printf("iq_target:    %.2f", (double)m_motor_state.iq_target);
+	commands_printf("max_duty:     %.2f", (double)m_motor_state.max_duty);
+	commands_printf("duty_now:     %.2f", (double)m_motor_state.duty_now);
+	commands_printf("phase:        %.2f", (double)m_motor_state.phase);
+	commands_printf("i_alpha:      %.2f", (double)m_motor_state.i_alpha);
+	commands_printf("i_beta:       %.2f", (double)m_motor_state.i_beta);
+	commands_printf("i_abs:        %.2f", (double)m_motor_state.i_abs);
 	commands_printf("i_abs_filter: %.2f", (double)m_motor_state.i_abs_filter);
+	commands_printf("i_bus:        %.2f", (double)m_motor_state.i_bus);
+	commands_printf("v_bus:        %.2f", (double)m_motor_state.v_bus);
+	commands_printf("v_alpha:      %.2f", (double)m_motor_state.v_alpha);
+	commands_printf("v_beta:       %.2f", (double)m_motor_state.v_beta);
+	commands_printf("mod_d:        %.2f", (double)m_motor_state.mod_d);
+	commands_printf("mod_q:        %.2f", (double)m_motor_state.mod_q);
+	commands_printf("id:           %.2f", (double)m_motor_state.id);
+	commands_printf("iq:           %.2f", (double)m_motor_state.iq);
+	commands_printf("id_filter:    %.2f", (double)m_motor_state.id_filter);
+	commands_printf("iq_filter:    %.2f", (double)m_motor_state.iq_filter);
+	commands_printf("vd:           %.2f", (double)m_motor_state.vd);
+	commands_printf("vq:           %.2f", (double)m_motor_state.vq);
+	commands_printf("vd_int:       %.2f", (double)m_motor_state.vd_int);
+	commands_printf("vq_int:       %.2f", (double)m_motor_state.vq_int);
+	commands_printf("svm_sector:   %.2f", (double)m_motor_state.svm_sector);
+	
 	commands_printf("Obs_x1:       %.2f", (double)m_observer_x1);
 	commands_printf("Obs_x2:       %.2f", (double)m_observer_x2);
 }
@@ -1567,6 +1620,11 @@ void mcpwm_foc_adc_int_handler(void *p, uint32_t flags) {
 #endif
 	}
 #endif
+
+
+
+
+
 
 	float ia = ADC_curr_norm_value[0] * FAC_CURRENT;
 	float ib = ADC_curr_norm_value[1] * FAC_CURRENT;
@@ -1835,7 +1893,7 @@ void mcpwm_foc_adc_int_handler(void *p, uint32_t flags) {
 		float Vb = ADC_VOLTS(ADC_IND_SENS3) * ((VIN_R1 + VIN_R2) / VIN_R2);
 		float Vc = ADC_VOLTS(ADC_IND_SENS2) * ((VIN_R1 + VIN_R2) / VIN_R2);
 #endif
-
+		
 		// Full Clarke transform (no balanced voltages)
 		m_motor_state.v_alpha = (2.0 / 3.0) * Va - (1.0 / 3.0) * Vb - (1.0 / 3.0) * Vc;
 		m_motor_state.v_beta = ONE_BY_SQRT3 * Vb - ONE_BY_SQRT3 * Vc;
@@ -1846,6 +1904,10 @@ void mcpwm_foc_adc_int_handler(void *p, uint32_t flags) {
 		// Park transform
 		float vd_tmp = c * m_motor_state.v_alpha + s * m_motor_state.v_beta;
 		float vq_tmp = c * m_motor_state.v_beta  - s * m_motor_state.v_alpha;
+		
+		if (UTILS_IS_NAN(m_motor_state.vd)) m_motor_state.vd = 0.0;
+		if (UTILS_IS_NAN(m_motor_state.vq)) m_motor_state.vq = 0.0;
+		
 		UTILS_LP_FAST(m_motor_state.vd, vd_tmp, 0.2);
 		UTILS_LP_FAST(m_motor_state.vq, vq_tmp, 0.2);
 
@@ -1884,6 +1946,7 @@ void mcpwm_foc_adc_int_handler(void *p, uint32_t flags) {
 			m_motor_state.phase = m_phase_now_observer;
 			break;
 		}
+
 	}
 
 	// Calculate duty cycle
@@ -2074,33 +2137,50 @@ static void do_dc_cal(void) {
 void observer_update(float v_alpha, float v_beta, float i_alpha, float i_beta,
 		float dt, volatile float *x1, volatile float *x2, volatile float *phase) {
 
-	const float L = (3.0 / 2.0) * m_conf->foc_motor_l;
-	const float lambda = m_conf->foc_motor_flux_linkage;
-	float R = (3.0 / 2.0) * m_conf->foc_motor_r;
+	//const float L = (3.0 / 2.0) * m_conf->foc_motor_l;
+	const float L = 1.5 * m_conf->foc_motor_l;
+	//const float lambda = m_conf->foc_motor_flux_linkage;
+	//float R = (3.0 / 2.0) * m_conf->foc_motor_r;
+	float R = 1.5 * m_conf->foc_motor_r;
 
 	// Saturation compensation
-	const float sign = (m_motor_state.iq * m_motor_state.vq) >= 0.0 ? 1.0 : -1.0;
+	const float sign = (m_motor_state.iq * m_motor_state.vq) < 0.0 ? -1.0 : 1.0;
 	R -= R * sign * m_conf->foc_sat_comp * (m_motor_state.i_abs_filter / m_conf->l_current_max);
 
 	// Temperature compensation
-	const float t = mc_interface_temp_motor_filtered();
-	if (m_conf->foc_temp_comp && t > -5.0) {
-		R += R * 0.00386 * (t - m_conf->foc_temp_comp_base_temp);
+	if (m_conf->foc_temp_comp) {
+		const float t = mc_interface_temp_motor_filtered();
+		if(t > -5.0){
+			R += R * 0.00386 * (t - m_conf->foc_temp_comp_base_temp);
+		}
 	}
 
 	const float L_ia = L * i_alpha;
 	const float L_ib = L * i_beta;
-	const float R_ia = R * i_alpha;
-	const float R_ib = R * i_beta;
-	const float lambda_2 = SQ(lambda);
+	//const float R_ia = R * i_alpha;
+	//const float R_ib = R * i_beta;
+	//const float lambda_2 = SQ(lambda);
 	const float gamma_half = m_gamma_now * 0.5;
 
 	// Original
-	float err = lambda_2 - (SQ(*x1 - L_ia) + SQ(*x2 - L_ib));
-	float x1_dot = -R_ia + v_alpha + gamma_half * (*x1 - L_ia) * err;
-	float x2_dot = -R_ib + v_beta + gamma_half * (*x2 - L_ib) * err;
-	*x1 += x1_dot * dt;
-	*x2 += x2_dot * dt;
+	//float err = lambda_2 - (SQ(*x1 - L_ia) + SQ(*x2 - L_ib));
+	float err = SQ(m_conf->foc_motor_flux_linkage) - (SQ(*x1 - L_ia) + SQ(*x2 - L_ib));
+	
+	//float x1_dot = -R_ia + v_alpha + gamma_half * (*x1 - L_ia) * err;
+	//float x2_dot = -R_ib + v_beta + gamma_half * (*x2 - L_ib) * err;
+	//*x1 += x1_dot * dt;
+	*x1 += (-(R * i_alpha) + v_alpha + gamma_half * (*x1 - L_ia) * err) * dt;
+	//*x2 += x2_dot * dt;
+	*x2 += (-(R * i_beta) + v_beta + gamma_half * (*x2 - L_ib) * err) * dt;
+	
+	//const float L_ia = L * i_alpha;
+	//const float L_ib = L * i_beta;
+	//const float gamma_half = m_gamma_now * 0.5;
+	
+	// float err = SQ(m_conf->foc_motor_flux_linkage) - (SQ(*x1 - L_ia) + SQ(*x2 - L_ib));
+	
+	//*x1 += (-(R * i_alpha) + v_alpha + gamma_half * (*x1 - L_ia) * err) * dt;
+	//*x2 += (-(R * i_beta) + v_beta + gamma_half * (*x2 - L_ib) * err) * dt;
 
 	// Iterative with some trial and error
 //	const int iterations = 6;
@@ -2142,9 +2222,13 @@ void observer_update(float v_alpha, float v_beta, float i_alpha, float i_beta,
 
 static void pll_run(float phase, float dt, volatile float *phase_var,
 		volatile float *speed_var) {
+	if (UTILS_IS_NAN(*phase_var)) *phase_var = 0.0;
 	float delta_theta = phase - *phase_var;
 	utils_norm_angle_rad(&delta_theta);
+
+	if (UTILS_IS_NAN(*speed_var)) *speed_var = 0.0;
 	*phase_var += (*speed_var + m_conf->foc_pll_kp * delta_theta) * dt;
+
 	utils_norm_angle_rad((float*)phase_var);
 	*speed_var += m_conf->foc_pll_ki * delta_theta * dt;
 }
@@ -2451,8 +2535,8 @@ static void run_pid_control_pos(float angle_now, float angle_set, float dt) {
 static void run_pid_control_speed(float dt) {
 	static float i_term = 0.0;
 	static float prev_error = 0.0;
-	float p_term;
-	float d_term;
+	static float d_filtered = 0.0;
+	
 
 	// PID is off. Return.
 	if (m_control_mode != CONTROL_MODE_SPEED) {
@@ -2468,32 +2552,37 @@ static void run_pid_control_speed(float dt) {
 	if (fabsf(m_speed_pid_set_rpm) < m_conf->s_pid_min_erpm) {
 		i_term = 0.0;
 		prev_error = error;
+		d_filtered = 0.0;
+		m_iq_set = 0.0;
 		return;
 	}
-
+	
 	// Compute parameters
-	p_term = error * m_conf->s_pid_kp * (1.0 / 20.0);
-	i_term += error * (m_conf->s_pid_ki * dt) * (1.0 / 20.0);
-	d_term = (error - prev_error) * (m_conf->s_pid_kd / dt) * (1.0 / 20.0);
-
+	float p_term = error * m_conf->s_pid_kp * 0.025; // 1.0 / 40.0
+	i_term += error * (m_conf->s_pid_ki * dt) * 0.025; // 1.0 / 40.0
+	float d_term = (error - prev_error) * (m_conf->s_pid_kd / dt) * 0.025; // 1.0 / 40.0
+	
 	// I-term wind-up protection
 	utils_truncate_number(&i_term, -1.0, 1.0);
 
 	// Store previous error
 	prev_error = error;
 
+	// Some d_term filtering
+	UTILS_LP_FAST(d_filtered, d_term, 0.1);
+	d_term = d_filtered;
+
 	// Calculate output
 	float output = p_term + i_term + d_term;
 	utils_truncate_number(&output, -1.0, 1.0);
 
 	// Optionally disable braking
-	if (!m_conf->s_pid_allow_braking) {
-		if (rpm > 0.0 && output < 0.0) {
+	if ((m_speed_pid_cruise_control_type == CRUISE_CONTROL_MOTOR_SETTINGS && !m_conf->s_pid_allow_braking) || m_speed_pid_cruise_control_type == CRUISE_CONTROL_BRAKING_DISABLED) {
+		if((rpm > 0.0 && output < 0.0) || (rpm < 0.0 && output > 0.0)){
 			output = 0.0;
-		}
-
-		if (rpm < 0.0 && output > 0.0) {
-			output = 0.0;
+			i_term = 0.0;
+			prev_error = 0;
+			d_filtered = 0.0;
 		}
 	}
 
@@ -2535,7 +2624,7 @@ static void start_pwm_hw(void) {
 	TIM_CCxNCmd(TIM1, TIM_Channel_3, TIM_CCxN_Enable);
 
 	// Generate COM event in ADC interrupt to get better synchronization
-//	TIM_GenerateEvent(TIM1, TIM_EventSource_COM);
+	//TIM_GenerateEvent(TIM1, TIM_EventSource_COM);
 
 #ifdef HW_HAS_DRV8313
 	ENABLE_BR();

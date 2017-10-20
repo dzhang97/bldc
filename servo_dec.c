@@ -1,5 +1,7 @@
 /*
 	Copyright 2016 Benjamin Vedder	benjamin@vedder.se
+	Copyright 2017 Nico Ackermann	added parameter to func pointer to handle timout in ppm,
+									chnaged type of servodec_get_last_update_time
 
 	This file is part of the VESC firmware.
 
@@ -40,7 +42,7 @@ static volatile bool use_median_filter = false;
 static volatile bool is_running = false;
 
 // Function pointers
-static void(*done_func)(void) = 0;
+static void(*done_func)(bool is_valid_signal) = 0;
 
 static void icuwidthcb(ICUDriver *icup) {
 	last_len_received[0] = ((float)icuGetWidthX(icup) / ((float)TIMER_FREQ / 1000.0));
@@ -81,7 +83,11 @@ static void icuwidthcb(ICUDriver *icup) {
 		last_update_time = chVTGetSystemTime();
 
 		if (done_func) {
-			done_func();
+			done_func(true);
+		}
+	} else {
+		if (done_func) {
+			done_func(false);
 		}
 	}
 }
@@ -107,7 +113,7 @@ static ICUConfig icucfg = {
  * A function that should be called every time the servo signals have been
  * decoded. Can be NULL.
  */
-void servodec_init(void (*d_func)(void)) {
+void servodec_init(void (*d_func)(bool is_valid_signal)) {
 	icuStart(&HW_ICU_DEV, &icucfg);
 	palSetPadMode(HW_ICU_GPIO, HW_ICU_PIN, PAL_MODE_ALTERNATE(HW_ICU_GPIO_AF));
 	icuStartCapture(&HW_ICU_DEV);
@@ -179,8 +185,8 @@ float servodec_get_servo(int servo_num) {
  * @return
  * The amount of milliseconds that have passed since an update.
  */
-uint32_t servodec_get_time_since_update(void) {
-	return chVTTimeElapsedSinceX(last_update_time) / (CH_CFG_ST_FREQUENCY / 1000);
+systime_t servodec_get_last_update_time(void) {
+	return last_update_time;
 }
 
 /**

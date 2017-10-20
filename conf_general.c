@@ -1,5 +1,6 @@
 /*
 	Copyright 2016 - 2017 Benjamin Vedder	benjamin@vedder.se
+	Copyright 2017 Nico Ackermann	added additional parameters to app settings
 
 	This file is part of the VESC firmware.
 
@@ -154,6 +155,19 @@ void conf_general_get_default_app_configuration(app_configuration *conf) {
 	conf->app_nrf_conf.address[1] = APPCONF_NRF_ADDR_B1;
 	conf->app_nrf_conf.address[2] = APPCONF_NRF_ADDR_B2;
 	conf->app_nrf_conf.send_crc_ack = APPCONF_NRF_SEND_CRC_ACK;
+	
+	//new config
+	conf->app_ppm_conf.tc_offset = APPCONF_PPM_TC_OFFSET;
+	conf->app_ppm_conf.cruise_left = CRUISE_CONTROL_MOTOR_SETTINGS;
+	conf->app_ppm_conf.cruise_right = CRUISE_CONTROL_MOTOR_SETTINGS;
+	conf->app_ppm_conf.max_erpm_for_dir_active = APPCONF_PPM_MAX_ERPM_FOR_DIR_ACTIVE;
+	conf->app_ppm_conf.max_erpm_for_dir = APPCONF_PPM_MAX_ERPM_FOR_DIR;
+	
+	conf->app_adc_conf.tc_offset = APPCONF_ADC_TC_OFFSET;
+	
+	conf->app_chuk_conf.tc_offset = APPCONF_CHUK_TC_OFFSET;
+	conf->app_chuk_conf.buttons_mirrored = APPCONF_CHUK_BUTTONS_MIRRORED;
+	//new config end
 }
 
 /**

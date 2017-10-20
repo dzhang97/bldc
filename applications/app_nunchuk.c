@@ -1,5 +1,9 @@
 /*
 	Copyright 2016 Benjamin Vedder	benjamin@vedder.se
+	Copyright 2017 Nico Ackermann	changed timeout detection and handling by adding a ramping, 
+									added average erpm detection, 
+									backwards via second brake,
+									mirroring for buttons
 
 	This file is part of the VESC firmware.
 
@@ -205,8 +209,34 @@ static THD_FUNCTION(output_thread, arg) {
 
 	for(;;) {
 		chThdSleepMilliseconds(OUTPUT_ITERATION_TIME_MS);
+		
+		static bool ramp_up_from_timeout = false;
+		static float prev_current = 0.0;
 
-		if (timeout_has_timeout() || chuck_error != 0 || config.ctrl_type == CHUK_CTRL_TYPE_NONE) {
+		const volatile mc_configuration *mcconf = mc_interface_get_configuration();
+		
+		if(timeout_has_timeout()){
+			if (!ramp_up_from_timeout) {
+				if (config.multi_esc) {
+					for (int i = 0;i < CAN_STATUS_MSGS_TO_STORE;i++) {
+						can_status_msg *msg = comm_can_get_status_msg_index(i);
+
+						if (msg->id >= 0 && UTILS_AGE_S(msg->rx_time) < MAX_CAN_AGE) {
+							comm_can_timeout_fire(msg->id);
+						}
+					}
+				}
+				
+				ramp_up_from_timeout = true;
+			}
+					
+			prev_current = mc_interface_get_tot_current();
+			
+			utils_truncate_number(&prev_current, mcconf->l_current_min, mcconf->l_current_max);
+			continue;
+		}
+
+		if (chuck_error != 0 || config.ctrl_type == CHUK_CTRL_TYPE_NONE) {
 			continue;
 		}
 
@@ -216,11 +246,10 @@ static THD_FUNCTION(output_thread, arg) {
 			continue;
 		}
 
-		const volatile mc_configuration *mcconf = mc_interface_get_configuration();
+		
 		static bool is_reverse = false;
 		static bool was_z = false;
 		const float current_now = mc_interface_get_tot_current_directional_filtered();
-		static float prev_current = 0.0;
 		const float max_current_diff = mcconf->l_current_max * 0.2;
 
 		if (chuck_d.bt_c && chuck_d.bt_z) {
@@ -228,7 +257,7 @@ static THD_FUNCTION(output_thread, arg) {
 			continue;
 		}
 
-		if (chuck_d.bt_z && !was_z && config.ctrl_type == CHUK_CTRL_TYPE_CURRENT &&
+		if ((config.buttons_mirrored ? chuck_d.bt_c : chuck_d.bt_z) && !was_z && config.ctrl_type == CHUK_CTRL_TYPE_CURRENT &&
 				fabsf(current_now) < max_current_diff) {
 			if (is_reverse) {
 				is_reverse = false;
@@ -237,7 +266,7 @@ static THD_FUNCTION(output_thread, arg) {
 			}
 		}
 
-		was_z = chuck_d.bt_z;
+		was_z = config.buttons_mirrored ? chuck_d.bt_c : chuck_d.bt_z;
 
 		led_external_set_reversed(is_reverse);
 
@@ -267,11 +296,61 @@ static THD_FUNCTION(output_thread, arg) {
 
 		// If c is pressed and no throttle is used, maintain the current speed with PID control
 		static bool was_pid = false;
+		static bool pid_breaking_enabled = false;
 
+		// Find lowest RPM and highest current
+		float rpm_local = mc_interface_get_rpm();
+		//if (is_reverse) {
+		//	rpm_local = -rpm_local;
+		//}
+
+		float rpm_lowest = rpm_local;
+		if (is_reverse) {
+			rpm_lowest = -rpm_lowest;
+		}
+		float mid_rpm = rpm_local;
+		int motor_count = 1;
+		float current_highest_abs = current_now;
+
+		if (config.multi_esc) {
+			for (int i = 0;i < CAN_STATUS_MSGS_TO_STORE;i++) {
+				can_status_msg *msg = comm_can_get_status_msg_index(i);
+
+				if (msg->id >= 0 && UTILS_AGE_S(msg->rx_time) < MAX_CAN_AGE) {
+					float rpm_tmp = msg->rpm;
+					
+					mid_rpm += rpm_tmp;
+					motor_count += 1;
+
+					if (is_reverse) {
+						rpm_tmp = -rpm_tmp;
+					}
+					
+
+					if (rpm_tmp < rpm_lowest) {
+						rpm_lowest = rpm_tmp;
+					}
+
+					// Make the current directional
+					float msg_current = msg->current;
+					if (msg->duty < 0) {
+						msg_current = -msg_current;
+					}
+
+					if (fabsf(msg_current) > fabsf(current_highest_abs)) {
+						current_highest_abs = msg_current;
+					}
+				}
+			}
+		}
+		// get middle rpm
+		mid_rpm /= motor_count;
+		
+		
 		// Filter RPM to avoid glitches
 		static float filter_buffer[RPM_FILTER_SAMPLES];
 		static int filter_ptr = 0;
-		filter_buffer[filter_ptr++] = mc_interface_get_rpm();
+		filter_buffer[filter_ptr++] = mid_rpm;
 		if (filter_ptr >= RPM_FILTER_SAMPLES) {
 			filter_ptr = 0;
 		}
@@ -282,22 +361,46 @@ static THD_FUNCTION(output_thread, arg) {
 		}
 		rpm_filtered /= RPM_FILTER_SAMPLES;
 
-		if (chuck_d.bt_c) {
-			static float pid_rpm = 0.0;
+		if ((config.buttons_mirrored ? chuck_d.bt_z : chuck_d.bt_c)
+			|| (config.ctrl_type == CHUK_CTRL_TYPE_CURRENT_NOREV && (config.buttons_mirrored ? chuck_d.bt_c : chuck_d.bt_z))) {
+			static float pid_rpm = 0.0;			
 
-			if (!was_pid) {
-				pid_rpm = rpm_filtered;
+			// if cruise not activated or (trigger is braking and brake not yet activated)
+			if (!was_pid 
+				|| (out_val < -0.1 && !pid_breaking_enabled)
+				|| (config.ctrl_type == CHUK_CTRL_TYPE_CURRENT_NOREV && !pid_breaking_enabled && (config.buttons_mirrored ? chuck_d.bt_c : chuck_d.bt_z))) {
+				// if cruise not activated or (actual filtered speed is less than set cruise speed)
+				if(!was_pid || fabsf(rpm_filtered) > fabsf(pid_rpm)){
+					pid_rpm = rpm_filtered;
 
-				if ((is_reverse && pid_rpm > 0.0) || (!is_reverse && pid_rpm < 0.0)) {
-					if (fabsf(pid_rpm) > mcconf->s_pid_min_erpm) {
-						// Abort if the speed is too high in the opposite direction
-						continue;
-					} else {
-						pid_rpm = 0.0;
+					if ((is_reverse && pid_rpm > 0.0) || (!is_reverse && pid_rpm < 0.0)) {
+						if (fabsf(pid_rpm) > mcconf->s_pid_min_erpm) {
+							// Abort if the speed is too high in the opposite direction
+							continue;
+						} else {
+							pid_rpm = 0.0;
+						}
 					}
 				}
 
 				was_pid = true;
+				//if trigger is braking then activate brake for cruise
+				
+				if (config.ctrl_type == CHUK_CTRL_TYPE_CURRENT) {
+					if (out_val < -0.1) {
+						pid_breaking_enabled = true;
+					} else {
+						pid_breaking_enabled = false;
+					}
+				} else {
+					// mode without reverse and direction switch button pressed
+					if (config.buttons_mirrored ? chuck_d.bt_c : chuck_d.bt_z) {
+						pid_breaking_enabled = true;	
+					} else {
+						pid_breaking_enabled = false;
+					}
+				}
+				
 			} else {
 				if (is_reverse) {
 					if (pid_rpm > 0.0) {
@@ -321,18 +424,18 @@ static THD_FUNCTION(output_thread, arg) {
 					}
 				}
 			}
+			
+			mc_interface_set_pid_speed_with_cruise_status(rpm_local + pid_rpm - mid_rpm, pid_breaking_enabled ? CRUISE_CONTROL_BRAKING_ENABLED : CRUISE_CONTROL_BRAKING_DISABLED);
 
-			mc_interface_set_pid_speed(pid_rpm);
-
-			// Send the same current to the other controllers
+			
+			// Send the same duty cycle to the other controllers
 			if (config.multi_esc) {
-				float current = mc_interface_get_tot_current_directional_filtered();
 
 				for (int i = 0;i < CAN_STATUS_MSGS_TO_STORE;i++) {
 					can_status_msg *msg = comm_can_get_status_msg_index(i);
 
 					if (msg->id >= 0 && UTILS_AGE_S(msg->rx_time) < MAX_CAN_AGE) {
-						comm_can_set_current(msg->id, current);
+						comm_can_set_rpm(msg->id, msg->rpm + pid_rpm - mid_rpm, pid_breaking_enabled ? CRUISE_CONTROL_BRAKING_ENABLED : CRUISE_CONTROL_BRAKING_DISABLED);
 					}
 				}
 			}
@@ -354,47 +457,20 @@ static THD_FUNCTION(output_thread, arg) {
 			current = out_val * fabsf(mcconf->lo_current_motor_min_now);
 		}
 
-		// Find lowest RPM and highest current
-		float rpm_local = mc_interface_get_rpm();
+
 		if (is_reverse) {
 			rpm_local = -rpm_local;
 		}
 
-		float rpm_lowest = rpm_local;
-		float current_highest_abs = current_now;
-
-		if (config.multi_esc) {
-			for (int i = 0;i < CAN_STATUS_MSGS_TO_STORE;i++) {
-				can_status_msg *msg = comm_can_get_status_msg_index(i);
-
-				if (msg->id >= 0 && UTILS_AGE_S(msg->rx_time) < MAX_CAN_AGE) {
-					float rpm_tmp = msg->rpm;
-					if (is_reverse) {
-						rpm_tmp = -rpm_tmp;
-					}
-
-					if (rpm_tmp < rpm_lowest) {
-						rpm_lowest = rpm_tmp;
-					}
-
-					// Make the current directional
-					float msg_current = msg->current;
-					if (msg->duty < 0.0) {
-						msg_current = -msg_current;
-					}
-
-					if (fabsf(msg_current) > fabsf(current_highest_abs)) {
-						current_highest_abs = msg_current;
-					}
-				}
-			}
-		}
-
 		// Apply ramping
 		const float current_range = mcconf->l_current_max + fabsf(mcconf->l_current_min);
-		const float ramp_time = fabsf(current) > fabsf(prev_current) ? config.ramp_time_pos : config.ramp_time_neg;
-
-		if (ramp_time > 0.01) {
+		
+		const float ramp_time = ((prev_current < 0.0 && current > prev_current) || (prev_current > 0.0 && current < prev_current))
+								? (ramp_up_from_timeout ? (current_range / 50.0) : config.ramp_time_neg) 
+								: (ramp_up_from_timeout ? (current_range / 20.0) : config.ramp_time_pos);
+			
+		if (ramp_time > 0.01 ) {
+			
 			const float ramp_step = ((float)OUTPUT_ITERATION_TIME_MS * current_range) / (ramp_time * 1000.0);
 
 			float current_goal = prev_current;
@@ -420,25 +496,35 @@ static THD_FUNCTION(output_thread, arg) {
 			if ((!is_decreasing || is_decreasing2) && fabsf(out_val) > 0.001) {
 				current_goal = goal_tmp2;
 			}
+			
+			if (current == current_goal) {
+				ramp_up_from_timeout = false;
+			}
 
+			out_val = out_val / current * current_goal;
+						
 			current = current_goal;
 		}
 
 		prev_current = current;
 
 		if (current < 0.0) {
+			
 			mc_interface_set_brake_current(current);
 
-			// Send brake command to all ESCs seen recently on the CAN bus
-			for (int i = 0;i < CAN_STATUS_MSGS_TO_STORE;i++) {
-				can_status_msg *msg = comm_can_get_status_msg_index(i);
+			if (config.multi_esc) {
+				// Send brake command to all ESCs seen recently on the CAN bus
+				for (int i = 0;i < CAN_STATUS_MSGS_TO_STORE;i++) {
+					can_status_msg *msg = comm_can_get_status_msg_index(i);
 
-				if (msg->id >= 0 && UTILS_AGE_S(msg->rx_time) < MAX_CAN_AGE) {
-					comm_can_set_current_brake(msg->id, current);
+					if (msg->id >= 0 && UTILS_AGE_S(msg->rx_time) < MAX_CAN_AGE) {
+						comm_can_set_current_brake_rel(msg->id, out_val);
+					}
 				}
 			}
 		} else {
 			float current_out = current;
+			float servo_val_out = out_val;
 
 			// Traction control
 			if (config.multi_esc) {
@@ -453,23 +539,32 @@ static THD_FUNCTION(output_thread, arg) {
 							}
 
 							float diff = rpm_tmp - rpm_lowest;
-							current_out = utils_map(diff, 0.0, config.tc_max_diff, current, 0.0);
-							if (current_out < mcconf->cc_min_current) {
-								current_out = 0.0;
+							
+							if (diff > config.tc_offset) {
+								current_out = utils_map(diff - config.tc_offset, 0.0, config.tc_max_diff - config.tc_offset, current, 0.0);
+								servo_val_out = utils_map(diff - config.tc_offset, 0.0, config.tc_max_diff - config.tc_offset, out_val, 0.0);
+							} else {
+								current_out = current;
+								servo_val_out = out_val;
 							}
 						}
 
 						if (is_reverse) {
-							comm_can_set_current(msg->id, -current_out);
+							comm_can_set_current_rel(msg->id, -servo_val_out);
 						} else {
-							comm_can_set_current(msg->id, current_out);
+							comm_can_set_current_rel(msg->id, servo_val_out);
 						}
 					}
 				}
 
 				if (config.tc) {
 					float diff = rpm_local - rpm_lowest;
-					current_out = utils_map(diff, 0.0, config.tc_max_diff, current, 0.0);
+					
+					if (diff > config.tc_offset) {
+						current_out = utils_map(diff - config.tc_offset, 0.0, config.tc_max_diff - config.tc_offset, current, 0.0);
+					} else {
+						current_out = current;
+					}
 					if (current_out < mcconf->cc_min_current) {
 						current_out = 0.0;
 					}

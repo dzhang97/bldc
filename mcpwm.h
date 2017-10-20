@@ -1,5 +1,6 @@
 /*
 	Copyright 2016 Benjamin Vedder	benjamin@vedder.se
+	Copyright 2017 Nico Ackermann	added functions to handle cruise control status
 
 	This file is part of the VESC firmware.
 
@@ -31,6 +32,7 @@ void mcpwm_init_hall_table(int8_t *table);
 void mcpwm_set_duty(float dutyCycle);
 void mcpwm_set_duty_noramp(float dutyCycle);
 void mcpwm_set_pid_speed(float rpm);
+void mcpwm_set_pid_speed_with_cruise_status(float rpm, ppm_cruise cruise_status);
 void mcpwm_set_pid_pos(float pos);
 void mcpwm_set_current(float current);
 void mcpwm_set_brake_current(float current);

@@ -1,5 +1,8 @@
 /*
 	Copyright 2016 Benjamin Vedder	benjamin@vedder.se
+	Copyright 2017 Nico Ackermann	changed max can menbers to a number of 3,
+									added function to fire timeout,
+									added to comm_can_set_rpm adds the cruise control status
 
 	This file is part of the VESC firmware.
 
@@ -24,7 +27,7 @@
 
 // Settings
 #define CAN_STATUS_MSG_INT_MS		1
-#define CAN_STATUS_MSGS_TO_STORE	10
+#define CAN_STATUS_MSGS_TO_STORE	3
 
 // Functions
 void comm_can_init(void);
@@ -33,10 +36,11 @@ void comm_can_send_buffer(uint8_t controller_id, uint8_t *data, unsigned int len
 void comm_can_set_duty(uint8_t controller_id, float duty);
 void comm_can_set_current(uint8_t controller_id, float current);
 void comm_can_set_current_brake(uint8_t controller_id, float current);
-void comm_can_set_rpm(uint8_t controller_id, float rpm);
+void comm_can_set_rpm(uint8_t controller_id, float rpm, ppm_cruise cruise_status);
 void comm_can_set_pos(uint8_t controller_id, float pos);
 void comm_can_set_current_rel(uint8_t controller_id, float current_rel);
 void comm_can_set_current_brake_rel(uint8_t controller_id, float current_rel);
+void comm_can_timeout_fire(uint8_t controller_id);
 can_status_msg *comm_can_get_status_msg_index(int index);
 can_status_msg *comm_can_get_status_msg_id(int id);
 

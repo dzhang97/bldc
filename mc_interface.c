@@ -1,5 +1,7 @@
 /*
 	Copyright 2016 - 2017 Benjamin Vedder	benjamin@vedder.se
+	Copyright 2017 Nico Ackermann	added cruise control status and changed and added functions to handle the speed control based on the status,
+									changed acceleration and braking calculation
 
 	This file is part of the VESC firmware.
 
@@ -62,6 +64,8 @@ static volatile float m_watt_seconds_charged;
 static volatile float m_position_set;
 static volatile float m_temp_fet;
 static volatile float m_temp_motor;
+// new
+static volatile ppm_cruise cruise_control_status;
 
 // Sampling variables
 #define ADC_SAMPLE_MAX_LEN		2000
@@ -119,6 +123,7 @@ void mc_interface_init(mc_configuration *configuration) {
 	m_last_adc_duration_sample = 0.0;
 	m_temp_fet = 0.0;
 	m_temp_motor = 0.0;
+	cruise_control_status = CRUISE_CONTROL_INACTIVE;
 
 	m_sample_len = 1000;
 	m_sample_int = 1;
@@ -375,6 +380,35 @@ void mc_interface_set_pid_speed(float rpm) {
 	default:
 		break;
 	}
+}
+
+void mc_interface_set_pid_speed_with_cruise_status(float rpm, ppm_cruise cruise_status) {
+	if (mc_interface_try_input()) {
+		return;
+	}
+
+	switch (m_conf.motor_type) {
+	case MOTOR_TYPE_BLDC:
+	case MOTOR_TYPE_DC:
+		mcpwm_set_pid_speed_with_cruise_status(DIR_MULT * rpm, cruise_status);
+		break;
+
+	case MOTOR_TYPE_FOC:
+		mcpwm_foc_set_pid_speed_with_cruise_status(DIR_MULT * rpm, cruise_status);
+		break;
+
+	default:
+		break;
+	}
+}
+
+ppm_cruise mc_interface_get_cruise_control_status(void){
+	return cruise_control_status;
+}
+
+// true = active false = inactive
+void mc_interface_set_cruise_control_status(ppm_cruise status){
+	cruise_control_status = status;
 }
 
 void mc_interface_set_pid_pos(float pos) {
@@ -1395,7 +1429,7 @@ static void update_override_limits(volatile mc_configuration *conf) {
 
 	if (lo_min > -conf->cc_min_current) {
 		lo_min = -conf->cc_min_current;
-	}
+	}						   
 
 	conf->lo_current_max = lo_max;
 	conf->lo_current_min = lo_min;
@@ -1416,10 +1450,10 @@ static void update_override_limits(volatile mc_configuration *conf) {
 	const float lo_in_min_watt = conf->l_watt_min / v_in;
 
 	const float lo_in_max = utils_min_abs(lo_in_max_watt, lo_in_max_batt);
-	const float lo_in_min = lo_in_min_watt;
+	//const float lo_in_min = lo_in_min_watt;
 
 	conf->lo_in_current_max = utils_min_abs(conf->l_in_current_max, lo_in_max);
-	conf->lo_in_current_min = utils_min_abs(conf->l_in_current_min, lo_in_min);
+	conf->lo_in_current_min = utils_min_abs(conf->l_in_current_min, lo_in_min_watt);
 
 	// Maximum current right now
 	float duty_abs = fabsf(mc_interface_get_duty_cycle_now());
@@ -1431,11 +1465,12 @@ static void update_override_limits(volatile mc_configuration *conf) {
 
 	if (duty_abs > 0.001) {
 		conf->lo_current_motor_max_now = utils_min_abs(conf->lo_current_max, conf->lo_in_current_max / duty_abs);
-		conf->lo_current_motor_min_now = utils_min_abs(conf->lo_current_min, conf->lo_in_current_min / duty_abs);
+		//conf->lo_current_motor_min_now = utils_min_abs(conf->lo_current_min, conf->lo_in_current_min / duty_abs);
 	} else {
 		conf->lo_current_motor_max_now = conf->lo_current_max;
-		conf->lo_current_motor_min_now = conf->lo_current_min;
 	}
+	
+	conf->lo_current_motor_min_now = conf->lo_current_min;
 }
 
 static THD_FUNCTION(timer_thread, arg) {

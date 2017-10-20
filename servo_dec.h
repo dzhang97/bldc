@@ -1,5 +1,7 @@
 /*
 	Copyright 2016 Benjamin Vedder	benjamin@vedder.se
+	Copyright 2017 Nico Ackermann	added parameter to func pointer to handle timout in ppm,
+									chnaged type of servodec_get_last_update_time
 
 	This file is part of the VESC firmware.
 
@@ -24,11 +26,11 @@
 #include <conf_general.h>
 
 // Functions
-void servodec_init(void (*d_func)(void));
+void servodec_init(void (*d_func)(bool is_valid_signal));
 void servodec_stop(void);
 void servodec_set_pulse_options(float start, float end, bool median_filter);
 float servodec_get_servo(int servo_num);
-uint32_t servodec_get_time_since_update(void);
+systime_t servodec_get_last_update_time(void);
 float servodec_get_last_pulse_len(int servo_num);
 
 #endif /* SERVO_DEC_H_ */

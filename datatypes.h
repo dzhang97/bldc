@@ -1,5 +1,9 @@
 /*
 	Copyright 2016 Benjamin Vedder	benjamin@vedder.se
+	Copyright 2017 Nico Ackermann	added ppm_cruise enum,
+									aditional throttle curve,
+									additional ppm control types,
+									additional parameters to ppm_config, adc_config and chuk_config, COMM_PACKET_ID, CAN_PACKET_ID, can_status_msg
 
 	This file is part of the VESC firmware.
 
@@ -31,6 +35,13 @@ typedef enum {
    MC_STATE_RUNNING,
    MC_STATE_FULL_BRAKE,
 } mc_state;
+
+typedef enum {
+   CRUISE_CONTROL_MOTOR_SETTINGS = 0,
+   CRUISE_CONTROL_BRAKING_DISABLED,
+   CRUISE_CONTROL_BRAKING_ENABLED,
+   CRUISE_CONTROL_INACTIVE
+} ppm_cruise;
 
 typedef enum {
 	PWM_MODE_NONSYNCHRONOUS_HISW = 0, // This mode is not recommended
@@ -251,6 +262,7 @@ typedef enum {
 // Throttle curve mode
 typedef enum {
 	THR_EXP_EXPO = 0,
+	THR_EXP_EXPO_NATURAL,
 	THR_EXP_NATURAL,
 	THR_EXP_POLY
 } thr_exp_mode;
@@ -264,7 +276,9 @@ typedef enum {
 	PPM_CTRL_TYPE_DUTY,
 	PPM_CTRL_TYPE_DUTY_NOREV,
 	PPM_CTRL_TYPE_PID,
-	PPM_CTRL_TYPE_PID_NOREV
+	PPM_CTRL_TYPE_PID_NOREV,
+	PPM_CTRL_TYPE_PID_NOACCELERATION,
+	PPM_CTRL_TYPE_CRUISE_CONTROL_SECONDARY_CHANNEL
 } ppm_control_type;
 
 typedef struct {
@@ -284,6 +298,11 @@ typedef struct {
 	bool multi_esc;
 	bool tc;
 	float tc_max_diff;
+	float tc_offset;
+	ppm_cruise cruise_left;
+	ppm_cruise cruise_right;
+	bool max_erpm_for_dir_active;
+	float max_erpm_for_dir;
 } ppm_config;
 
 // ADC control types
@@ -324,6 +343,7 @@ typedef struct {
 	bool tc;
 	float tc_max_diff;
 	uint32_t update_rate_hz;
+	float tc_offset;
 } adc_config;
 
 // Nunchuk control types
@@ -345,6 +365,8 @@ typedef struct {
 	bool multi_esc;
 	bool tc;
 	float tc_max_diff;
+	float tc_offset;
+	bool buttons_mirrored;
 } chuk_config;
 
 // NRF Datatypes
@@ -469,7 +491,16 @@ typedef enum {
 	COMM_FORWARD_CAN,
 	COMM_SET_CHUCK_DATA,
 	COMM_CUSTOM_APP_DATA,
-	COMM_NRF_START_PAIRING
+	COMM_NRF_START_PAIRING,
+	SPACER0,
+	SPACER1,
+	SPACER2,
+	SPACER3,
+	SPACER4,
+	COMM_SET_SPEED_MODE,
+	COMM_GET_SPEED_MODE,
+	COMM_SET_CURRENT_CONF_AS_DEFAULT,
+	COMM_SET_MOTOR_TYPE
 } COMM_PACKET_ID;
 
 // CAN commands
@@ -485,7 +516,8 @@ typedef enum {
 	CAN_PACKET_PROCESS_SHORT_BUFFER,
 	CAN_PACKET_STATUS,
 	CAN_PACKET_SET_CURRENT_REL,
-	CAN_PACKET_SET_CURRENT_BRAKE_REL
+	CAN_PACKET_SET_CURRENT_BRAKE_REL,
+	CAN_PACKET_TIMEOUT_FIRE
 } CAN_PACKET_ID;
 
 // Logged fault data
@@ -534,6 +566,7 @@ typedef struct {
 	float rpm;
 	float current;
 	float duty;
+	ppm_cruise cruise_control_status;
 } can_status_msg;
 
 typedef struct {

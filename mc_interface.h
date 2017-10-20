@@ -1,5 +1,6 @@
 /*
 	Copyright 2016 Benjamin Vedder	benjamin@vedder.se
+	Copyright 2017 Nico Ackermann	added functions to handle cruise control status
 
 	This file is part of the VESC firmware.
 
@@ -37,6 +38,9 @@ mc_state mc_interface_get_state(void);
 void mc_interface_set_duty(float dutyCycle);
 void mc_interface_set_duty_noramp(float dutyCycle);
 void mc_interface_set_pid_speed(float rpm);
+void mc_interface_set_pid_speed_with_cruise_status(float rpm, ppm_cruise cruise_status);
+ppm_cruise mc_interface_get_cruise_control_status(void);
+void mc_interface_set_cruise_control_status(ppm_cruise status); // 1 = active 0 = inactive
 void mc_interface_set_pid_pos(float pos);
 void mc_interface_set_current(float current);
 void mc_interface_set_brake_current(float current);

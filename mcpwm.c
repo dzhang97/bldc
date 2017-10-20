@@ -1,5 +1,8 @@
 /*
 	Copyright 2016 Benjamin Vedder	benjamin@vedder.se
+	Copyright 2017 Nico Ackermann	added cruise control status and handling and changed speed control calculation,
+									added hysterysis for hall hybrid mode,
+									changed current limit truncation
 
 	This file is part of the VESC firmware.
 
@@ -53,6 +56,7 @@ static volatile float dutycycle_set;
 static volatile float dutycycle_now;
 static volatile float rpm_now;
 static volatile float speed_pid_set_rpm;
+static volatile ppm_cruise speed_pid_cruise_control_type;
 static volatile float pos_pid_set_pos;
 static volatile float current_set;
 static volatile int tachometer;
@@ -86,6 +90,8 @@ static volatile float last_pwm_cycles_sum;
 static volatile float last_pwm_cycles_sums[6];
 static volatile bool dccal_done;
 static volatile bool sensorless_now;
+static volatile float sensor_hyst_min;
+static volatile float sensor_hyst_max;
 static volatile int hall_detect_table[8][7];
 static volatile bool init_done;
 static volatile mc_comm_mode comm_mode_next;
@@ -179,6 +185,7 @@ void mcpwm_init(volatile mc_configuration *configuration) {
 	dutycycle_set = 0.0;
 	dutycycle_now = 0.0;
 	speed_pid_set_rpm = 0.0;
+	speed_pid_cruise_control_type = CRUISE_CONTROL_MOTOR_SETTINGS;
 	pos_pid_set_pos = 0.0;
 	current_set = 0.0;
 	tachometer = 0;
@@ -532,6 +539,14 @@ void mcpwm_init_hall_table(int8_t *table) {
 
 		hall_to_phase_table[i] = fwd_to_rev[ind_now];
 	}
+	
+	// init the sensor hyst
+	float sensor_hyst = conf->hall_sl_erpm * 0.1;
+	if(sensor_hyst > 500.0){
+		sensor_hyst = 500.0;
+	}
+	sensor_hyst_min = conf->hall_sl_erpm - sensor_hyst;
+	sensor_hyst_max = conf->hall_sl_erpm + sensor_hyst;
 }
 
 static void do_dc_cal(void) {
@@ -612,6 +627,14 @@ void mcpwm_set_duty_noramp(float dutyCycle) {
 void mcpwm_set_pid_speed(float rpm) {
 	control_mode = CONTROL_MODE_SPEED;
 	speed_pid_set_rpm = rpm;
+	speed_pid_cruise_control_type = CRUISE_CONTROL_MOTOR_SETTINGS;
+	
+}
+
+void mcpwm_set_pid_speed_with_cruise_status(float rpm, ppm_cruise cruise_status) {
+	control_mode = CONTROL_MODE_SPEED;
+	speed_pid_set_rpm = rpm;
+	speed_pid_cruise_control_type = cruise_status;
 }
 
 /**
@@ -645,7 +668,12 @@ void mcpwm_set_current(float current) {
 		return;
 	}
 
-	utils_truncate_number(&current, -conf->l_current_max, conf->l_current_max);
+	// truncate by the higher value because it also could mean accelerate reverse
+	if(conf->l_current_max > -conf->l_current_min){
+		utils_truncate_number(&current, -conf->l_current_max, conf->l_current_max);
+	}else{
+		utils_truncate_number(&current, conf->l_current_min, -conf->l_current_min);
+	}
 
 	control_mode = CONTROL_MODE_CURRENT;
 	current_set = current;
@@ -669,7 +697,7 @@ void mcpwm_set_brake_current(float current) {
 		return;
 	}
 
-	utils_truncate_number(&current, -fabsf(conf->l_current_min), fabsf(conf->l_current_min));
+	utils_truncate_number(&current, conf->l_current_min, -conf->l_current_min);
 
 	control_mode = CONTROL_MODE_CURRENT_BRAKE;
 	current_set = current;
@@ -1008,13 +1036,10 @@ static void set_duty_cycle_ll(float dutyCycle) {
 
 	if (dutyCycle < conf->l_min_duty) {
 		float max_erpm_fbrake;
-#if BLDC_SPEED_CONTROL_CURRENT
 		if (control_mode == CONTROL_MODE_CURRENT ||
 				control_mode == CONTROL_MODE_CURRENT_BRAKE ||
 				control_mode == CONTROL_MODE_SPEED) {
-#else
-		if (control_mode == CONTROL_MODE_CURRENT || control_mode == CONTROL_MODE_CURRENT_BRAKE) {
-#endif
+
 			max_erpm_fbrake = conf->l_max_erpm_fbrake_cc;
 		} else {
 			max_erpm_fbrake = conf->l_max_erpm_fbrake;
@@ -1120,36 +1145,33 @@ static void set_duty_cycle_hw(float dutyCycle) {
 static void run_pid_control_speed(void) {
 	static float i_term = 0;
 	static float prev_error = 0;
-	float p_term;
-	float d_term;
-
-	// PID is off. Return.
+	static float d_filtered = 0.0;
+		// PID is off. Return.
 	if (control_mode != CONTROL_MODE_SPEED) {
-#if BLDC_SPEED_CONTROL_CURRENT
 		i_term = 0.0;
-#else
-		i_term = dutycycle_now;
-#endif
 		prev_error = 0.0;
+		d_filtered = 0.0;
 		return;
 	}
 
 	const float rpm = mcpwm_get_rpm();
 	float error = speed_pid_set_rpm - rpm;
 
-	// Too low RPM set. Stop and return.
-	if (fabsf(speed_pid_set_rpm) < conf->s_pid_min_erpm) {
-		i_term = dutycycle_now;
+	// Too low RPM set. Reset state and return.
+	if (fabsf(speed_pid_set_rpm) <conf->s_pid_min_erpm) {
+		i_term = 0.0;
 		prev_error = error;
-		mcpwm_set_duty(0.0);
+		d_filtered = 0.0;
+		current_set = 0.0;
 		return;
 	}
 
-#if BLDC_SPEED_CONTROL_CURRENT
+	static float scale = 1.0 / 40.0;
+
 	// Compute parameters
-	p_term = error * conf->s_pid_kp * (1.0 / 20.0);
-	i_term += error * (conf->s_pid_ki * MCPWM_PID_TIME_K) * (1.0 / 20.0);
-	d_term = (error - prev_error) * (conf->s_pid_kd / MCPWM_PID_TIME_K) * (1.0 / 20.0);
+	float p_term = error * conf->s_pid_kp * scale;
+	i_term += error * (conf->s_pid_ki * MCPWM_PID_TIME_K) * scale;
+	float d_term = (error - prev_error) * (conf->s_pid_kd / MCPWM_PID_TIME_K) * scale;
 
 	// I-term wind-up protection
 	utils_truncate_number(&i_term, -1.0, 1.0);
@@ -1158,7 +1180,6 @@ static void run_pid_control_speed(void) {
 	prev_error = error;
 
 	// Some d_term filtering
-	static float d_filtered = 0.0;
 	UTILS_LP_FAST(d_filtered, d_term, 0.1);
 	d_term = d_filtered;
 
@@ -1167,14 +1188,14 @@ static void run_pid_control_speed(void) {
 	utils_truncate_number(&output, -1.0, 1.0);
 
 	// Optionally disable braking
-	if (!conf->s_pid_allow_braking) {
-		if (rpm > 0.0 && output < 0.0) {
+	if ((speed_pid_cruise_control_type == CRUISE_CONTROL_MOTOR_SETTINGS && !conf->s_pid_allow_braking) || speed_pid_cruise_control_type == CRUISE_CONTROL_BRAKING_DISABLED) {
+		if((rpm > 0.0 && output < 0.0) || (rpm < 0.0 && output > 0.0)){
 			output = 0.0;
+			i_term = 0.0;
+			prev_error = 0;
+			d_filtered = 0.0;
 		}
 
-		if (rpm < 0.0 && output > 0.0) {
-			output = 0.0;
-		}
 	}
 
 	current_set = output * conf->lo_current_max;
@@ -1182,40 +1203,6 @@ static void run_pid_control_speed(void) {
 	if (state != MC_STATE_RUNNING) {
 		set_duty_cycle_hl(SIGN(output) * conf->l_min_duty);
 	}
-#else
-	// Compensation for supply voltage variations
-	float scale = 1.0 / GET_INPUT_VOLTAGE();
-
-	// Compute parameters
-	p_term = error * conf->s_pid_kp * scale;
-	i_term += error * (conf->s_pid_ki * MCPWM_PID_TIME_K) * scale;
-	d_term = (error - prev_error) * (conf->s_pid_kd / MCPWM_PID_TIME_K) * scale;
-
-	// I-term wind-up protection
-	utils_truncate_number(&i_term, -1.0, 1.0);
-
-	// Store previous error
-	prev_error = error;
-
-	// Calculate output
-	float output = p_term + i_term + d_term;
-
-	// Make sure that at least minimum output is used
-	if (fabsf(output) < conf->l_min_duty) {
-		output = SIGN(output) * conf->l_min_duty;
-	}
-
-	// Do not output in reverse direction to oppose too high rpm
-	if (speed_pid_set_rpm > 0.0 && output < 0.0) {
-		output = conf->l_min_duty;
-		i_term = 0.0;
-	} else if (speed_pid_set_rpm < 0.0 && output > 0.0) {
-		output = -conf->l_min_duty;
-		i_term = 0.0;
-	}
-
-	set_duty_cycle_hl(output);
-#endif
 }
 
 static void run_pid_control_pos(float dt) {
@@ -1932,13 +1919,10 @@ void mcpwm_adc_int_handler(void *p, uint32_t flags) {
 
 		float dutycycle_now_tmp = dutycycle_now;
 
-#if BLDC_SPEED_CONTROL_CURRENT
 		if (control_mode == CONTROL_MODE_CURRENT ||
 				control_mode == CONTROL_MODE_POS ||
 				control_mode == CONTROL_MODE_SPEED) {
-#else
-		if (control_mode == CONTROL_MODE_CURRENT || control_mode == CONTROL_MODE_POS) {
-#endif
+
 			// Compute error
 			const float error = current_set - (direction ? current_nofilter : -current_nofilter);
 			float step = error * conf->cc_gain * voltage_scale;
@@ -2528,11 +2512,20 @@ static void update_rpm_tacho(void) {
 }
 
 static void update_sensor_mode(void) {
-	if (conf->sensor_mode == SENSOR_MODE_SENSORLESS ||
-			(conf->sensor_mode == SENSOR_MODE_HYBRID &&
-					fabsf(mcpwm_get_rpm()) > conf->hall_sl_erpm)) {
+	if (conf->sensor_mode == SENSOR_MODE_SENSORLESS ) {
 		sensorless_now = true;
-	} else {
+	} else if (conf->sensor_mode == SENSOR_MODE_HYBRID) {
+		// Hysteresis 5 % of total speed
+		if (sensorless_now) {
+			if (fabsf(mcpwm_get_rpm()) < sensor_hyst_min) {
+				sensorless_now = false;
+			}
+		} else {
+			if (fabsf(mcpwm_get_rpm()) > sensor_hyst_max) {
+				sensorless_now = true;
+			}
+		}
+	}else{
 		sensorless_now = false;
 	}
 }

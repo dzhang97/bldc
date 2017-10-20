@@ -1,5 +1,6 @@
 /*
 	Copyright 2016 Benjamin Vedder	benjamin@vedder.se
+	Copyright 2017 Nico Ackermann	changed default max erpm and speed control parameters
 
 	This file is part of the VESC firmware.
 
@@ -63,10 +64,10 @@
 #define MCCONF_L_BATTERY_CUT_END		8.0		// Limit the positive current completely at this voltage
 #endif
 #ifndef MCCONF_L_RPM_MAX
-#define MCCONF_L_RPM_MAX				100000.0	// The motor speed limit (Upper)
+#define MCCONF_L_RPM_MAX				60000.0	// The motor speed limit (Upper)
 #endif
 #ifndef MCCONF_L_RPM_MIN
-#define MCCONF_L_RPM_MIN				-100000.0	// The motor speed limit (Lower)
+#define MCCONF_L_RPM_MIN				-60000.0	// The motor speed limit (Lower)
 #endif
 #ifndef MCCONF_L_RPM_START
 #define MCCONF_L_RPM_START				0.8		// Fraction of full speed where RPM current limiting starts
@@ -107,13 +108,13 @@
 
 // Speed PID parameters
 #ifndef MCCONF_S_PID_KP
-#define MCCONF_S_PID_KP					0.004	// Proportional gain
+#define MCCONF_S_PID_KP					0.003	// Proportional gain
 #endif
 #ifndef MCCONF_S_PID_KI
-#define MCCONF_S_PID_KI					0.004	// Integral gain
+#define MCCONF_S_PID_KI					0.003	// Integral gain
 #endif
 #ifndef MCCONF_S_PID_KD
-#define MCCONF_S_PID_KD					0.0001	// Derivative gain
+#define MCCONF_S_PID_KD					0.0		// Derivative gain
 #endif
 #ifndef MCCONF_S_PID_MIN_RPM
 #define MCCONF_S_PID_MIN_RPM			900.0	// Minimum allowed RPM

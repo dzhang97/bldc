@@ -1,5 +1,6 @@
 /*
 	Copyright 2016 Benjamin Vedder	benjamin@vedder.se
+	Copyright 2017 Nico Ackermann added funtion to fire timeout
 
 	This file is part of the VESC firmware.
 
@@ -28,6 +29,7 @@
 void timeout_init(void);
 void timeout_configure(systime_t timeout, float brake_current);
 void timeout_reset(void);
+void timeout_fire(void);
 bool timeout_has_timeout(void);
 systime_t timeout_get_timeout_msec(void);
 float timeout_get_brake_current(void);

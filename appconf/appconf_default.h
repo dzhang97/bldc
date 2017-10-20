@@ -1,5 +1,6 @@
 /*
 	Copyright 2016 Benjamin Vedder	benjamin@vedder.se
+	Copyright 2017 Nico Ackermann	added additional parameters and changed default values for ramping, traction control and uart baud rate
 
 	This file is part of the VESC firmware.
 
@@ -90,7 +91,16 @@
 #define APPCONF_PPM_TC						false
 #endif
 #ifndef APPCONF_PPM_TC_MAX_DIFF
-#define APPCONF_PPM_TC_MAX_DIFF				3000.0
+#define APPCONF_PPM_TC_MAX_DIFF				5000.0
+#endif
+#ifndef APPCONF_PPM_TC_OFFSET
+#define APPCONF_PPM_TC_OFFSET				3000.0
+#endif
+#ifndef APPCONF_PPM_MAX_ERPM_FOR_DIR_ACTIVE
+#define APPCONF_PPM_MAX_ERPM_FOR_DIR_ACTIVE	false
+#endif
+#ifndef APPCONF_PPM_MAX_ERPM_FOR_DIR
+#define APPCONF_PPM_MAX_ERPM_FOR_DIR		4000.0
 #endif
 
 // ADC app configureation
@@ -143,10 +153,10 @@
 #define APPCONF_ADC_THROTTLE_EXP_MODE		THR_EXP_POLY
 #endif
 #ifndef APPCONF_ADC_RAMP_TIME_POS
-#define APPCONF_ADC_RAMP_TIME_POS			0.9
+#define APPCONF_ADC_RAMP_TIME_POS			0.3
 #endif
 #ifndef APPCONF_ADC_RAMP_TIME_NEG
-#define APPCONF_ADC_RAMP_TIME_NEG			0.3
+#define APPCONF_ADC_RAMP_TIME_NEG			0.1
 #endif
 #ifndef APPCONF_ADC_MULTI_ESC
 #define APPCONF_ADC_MULTI_ESC				false
@@ -155,15 +165,18 @@
 #define APPCONF_ADC_TC						false
 #endif
 #ifndef APPCONF_ADC_TC_MAX_DIFF
-#define APPCONF_ADC_TC_MAX_DIFF				3000.0
+#define APPCONF_ADC_TC_MAX_DIFF				5000.0
 #endif
 #ifndef APPCONF_ADC_UPDATE_RATE_HZ
 #define APPCONF_ADC_UPDATE_RATE_HZ			500
 #endif
+#ifndef APPCONF_ADC_TC_OFFSET
+#define APPCONF_ADC_TC_OFFSET				3000.0
+#endif
 
 // UART app
 #ifndef APPCONF_UART_BAUDRATE
-#define APPCONF_UART_BAUDRATE				115200
+#define APPCONF_UART_BAUDRATE				9600
 #endif
 
 // Nunchuk app
@@ -174,10 +187,10 @@
 #define APPCONF_CHUK_HYST					0.15
 #endif
 #ifndef APPCONF_CHUK_RAMP_TIME_POS
-#define APPCONF_CHUK_RAMP_TIME_POS			0.9
+#define APPCONF_CHUK_RAMP_TIME_POS			0.3
 #endif
 #ifndef APPCONF_CHUK_RAMP_TIME_NEG
-#define APPCONF_CHUK_RAMP_TIME_NEG			0.3
+#define APPCONF_CHUK_RAMP_TIME_NEG			0.1
 #endif
 #ifndef APPCONF_STICK_ERPM_PER_S_IN_CC
 #define APPCONF_STICK_ERPM_PER_S_IN_CC		3000.0
@@ -198,7 +211,13 @@
 #define APPCONF_CHUK_TC						false
 #endif
 #ifndef APPCONF_CHUK_TC_MAX_DIFF
-#define APPCONF_CHUK_TC_MAX_DIFF			3000.0
+#define APPCONF_CHUK_TC_MAX_DIFF			5000.0
+#endif
+#ifndef APPCONF_CHUK_TC_OFFSET
+#define APPCONF_CHUK_TC_OFFSET				3000.0
+#endif
+#ifndef APPCONF_CHUK_BUTTONS_MIRRORED
+#define APPCONF_CHUK_BUTTONS_MIRRORED		false
 #endif
 
 // NRF app
