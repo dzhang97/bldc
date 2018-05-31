@@ -39,7 +39,7 @@
 // Settings
 #define MAX_CAN_AGE						0.1
 #define MIN_PULSES_WITHOUT_POWER		50
-#define RPM_FILTER_SAMPLES				8
+#define RPM_FILTER_SAMPLES				4
 
 // Threads
 static THD_FUNCTION(ppm_thread, arg);
@@ -58,9 +58,6 @@ static volatile ppm_config config;
 static volatile int pulses_without_power = 0;
 
 static float input_val = 0.0;
-static volatile float filter_buffer[RPM_FILTER_SAMPLES];
-static volatile int filter_ptr = 0;
-static volatile bool has_enough_pid_filter_data = false;
 static volatile float direction_hyst = 0;
 
 // Private functions
@@ -72,8 +69,6 @@ void app_ppm_configure(ppm_config *conf) {
 	config = *conf;
 	pulses_without_power = 0;
 	
-	has_enough_pid_filter_data = false;
-	filter_ptr = 0;
 	mc_interface_set_cruise_control_status(CRUISE_CONTROL_INACTIVE);
 
 	if (is_running) {
@@ -139,6 +134,27 @@ static void update(void *p) {
 	chVTSetI(&vt, MS2ST(2), update, p);
 	chEvtSignalI(ppm_tp, (eventmask_t) 1);
 	chSysUnlockFromISR();
+}
+
+static bool set_or_update_pid_rpm(float mid_rpm, float servo_val, float passed_time, float max_erpm){
+	if (pid_rpm == 0) {
+		// are we too fast
+		if (mid_rpm > max_erpm) {
+			return false;
+		}
+		pid_rpm = mid_rpm;
+	}else{
+		pid_rpm += (servo_val * 3000.0) * (passed_time / 1000.0);
+			
+		if (pid_rpm > (mid_rpm + 3000.0)) {
+			pid_rpm = mid_rpm + 3000.0;
+		}
+	}
+	
+	if (pid_rpm > max_erpm) {
+		pid_rpm = max_erpm;
+	}
+	return true;
 }
 
 static THD_FUNCTION(ppm_thread, arg) {
@@ -258,8 +274,9 @@ static THD_FUNCTION(ppm_thread, arg) {
 								? (ramp_up_from_timeout ? mcconf->lo_current_motor_max_now / 50 : config.ramp_time_neg)
 								: (ramp_up_from_timeout ? fabsf(mcconf->lo_current_motor_min_now) / 20 : config.ramp_time_pos);
 		
+		float passed_time = (float)ST2MS(chVTTimeElapsedSinceX(last_time));
 		if (ramp_time > 0.01) {
-			const float ramp_step = (float)ST2MS(chVTTimeElapsedSinceX(last_time)) / (ramp_time * 1000.0);
+			const float ramp_step = passed_time / (ramp_time * 1000.0);
 			utils_step_towards(&servo_val_ramp, servo_val, ramp_step);
 			last_time = chVTGetSystemTimeX();
 			if (servo_val == servo_val_ramp) {
@@ -340,12 +357,11 @@ static THD_FUNCTION(ppm_thread, arg) {
 					}
 
 					// check of can bus send cruise control command
-					if (cruise_control_status != CRUISE_CONTROL_INACTIVE && servo_val == 0.0) {
+					// needs to move forwared to activate cruise while accelerating
+					if (cruise_control_status != CRUISE_CONTROL_INACTIVE && servo_val >= 0.0) {
 						// is rpm in range for cruise control
-						if (fabsf(rpm_lowest) > mcconf->s_pid_min_erpm) {
-							if (pid_rpm == 0) {
-								pid_rpm = mid_rpm;
-							}
+						if (fabsf(rpm_lowest) > mcconf->s_pid_min_erpm
+							&& set_or_update_pid_rpm(mid_rpm, servo_val, passed_time, mcconf->l_max_erpm)) {
 							current_mode = false;
 							send_pid = true;
 							
@@ -353,6 +369,7 @@ static THD_FUNCTION(ppm_thread, arg) {
 						} else {
 							pid_rpm = 0;
 							current = 0.0;
+							servo_val = 0.0;
 						}
 					}else{
 							current = servo_val * mcconf->lo_current_motor_max_now;
@@ -393,18 +410,17 @@ static THD_FUNCTION(ppm_thread, arg) {
 			} else { // normal backwards
 				if ((servo_val >= 0.0 && rpm_local > 0.0) || (servo_val < 0.0 && rpm_local < 0.0)) {
 					// check of can bus send cruise control command
-					if (cruise_control_status != CRUISE_CONTROL_INACTIVE && servo_val == 0.0) {
+					if (cruise_control_status != CRUISE_CONTROL_INACTIVE && servo_val >= 0.0) {
 						// is rpm in range for cruise control
-						if (rpm_lowest > mcconf->s_pid_min_erpm) {
-							if (pid_rpm == 0) {
-								pid_rpm = rpm_lowest;
-							}
+						if (rpm_lowest > mcconf->s_pid_min_erpm
+							&& set_or_update_pid_rpm(mid_rpm, servo_val, passed_time, mcconf->l_max_erpm)) {
 							current_mode = false;
 							send_pid = true;
 							mc_interface_set_pid_speed_with_cruise_status(rpm_local + pid_rpm - mid_rpm, cruise_control_status);
 						} else {
 							pid_rpm = 0;
 							current = 0.0;
+							servo_val = 0.0;
 						}
 					}else{
 						current = servo_val * mcconf->lo_current_motor_max_now;
@@ -422,18 +438,17 @@ static THD_FUNCTION(ppm_thread, arg) {
 			current_mode = true;
 			if ((servo_val >= 0.0 && rpm_local > 0.0) || (servo_val < 0.0 && rpm_local < 0.0)) {
 				// check of can bus send cruise control command
-				if (cruise_control_status != CRUISE_CONTROL_INACTIVE && servo_val == 0.0) {
+				if (cruise_control_status != CRUISE_CONTROL_INACTIVE && servo_val >= 0.0) {
 					// is rpm in range for cruise control
-					if (rpm_lowest > mcconf->s_pid_min_erpm) {
-						if (pid_rpm == 0) {
-							pid_rpm = rpm_lowest;
-						}
+					if (rpm_lowest > mcconf->s_pid_min_erpm
+						&& set_or_update_pid_rpm(mid_rpm, servo_val, passed_time, mcconf->l_max_erpm)) {
 						current_mode = false;
 						send_pid = true;
 						mc_interface_set_pid_speed_with_cruise_status(rpm_local + pid_rpm - mid_rpm, cruise_control_status);
 					} else {
 						pid_rpm = 0;
 						current = 0.0;
+						servo_val = 0.0;
 					}
 				}else{
 					current = servo_val * mcconf->lo_current_motor_max_now;
@@ -451,18 +466,17 @@ static THD_FUNCTION(ppm_thread, arg) {
 			current_mode = true;		
 			if (servo_val >= 0.0) {
 				// check of can bus send cruise control command
-				if (cruise_control_status != CRUISE_CONTROL_INACTIVE && servo_val == 0.0) {
+				if (cruise_control_status != CRUISE_CONTROL_INACTIVE && servo_val >= 0.0) {
 					// is rpm in range for cruise control
-					if (rpm_lowest > mcconf->s_pid_min_erpm) {
-						if (pid_rpm == 0) {
-							pid_rpm = rpm_lowest;
-						}
+					if (rpm_lowest > mcconf->s_pid_min_erpm
+						&& set_or_update_pid_rpm(mid_rpm, servo_val, passed_time, mcconf->l_max_erpm)) {
 						current_mode = false;
 						send_pid = true;
 						mc_interface_set_pid_speed_with_cruise_status(rpm_local + pid_rpm - mid_rpm, cruise_control_status);
 					} else {
 						pid_rpm = 0;
 						current = 0.0;
+						servo_val = 0.0;
 					}
 				}else{
 					current = servo_val * mcconf->lo_current_motor_max_now;
@@ -479,35 +493,29 @@ static THD_FUNCTION(ppm_thread, arg) {
 		case PPM_CTRL_TYPE_PID_NOACCELERATION:
 			current_mode = true;
 			
-			filter_buffer[filter_ptr++] = mid_rpm;
-			if (filter_ptr >= RPM_FILTER_SAMPLES) {
-				filter_ptr = 0;
-				has_enough_pid_filter_data = true;
-			}
+			static volatile float rpm_filter_buffer[RPM_FILTER_SAMPLES];
+			static volatile int rpm_filter_ptr = 0;
+			static volatile float rpm_sum = 0.0;
 			
-			float rpm_filtered = 0.0;
-			// only send when enough values are collected
-			if (has_enough_pid_filter_data)	{
-				for (int i = 0; i < RPM_FILTER_SAMPLES; i++) {
-					rpm_filtered += filter_buffer[i];
-				}
-				rpm_filtered /= RPM_FILTER_SAMPLES;
-			}
-			
+			//update the array to get the average rpm
+			rpm_sum += mid_rpm - rpm_filter_buffer[rpm_filter_ptr];
+	        rpm_filter_buffer[rpm_filter_ptr++] = mid_rpm;
+	        if(rpm_filter_ptr == RPM_FILTER_SAMPLES) rpm_filter_ptr = 0;
+	        float mid_rpm_filtered = rpm_sum / RPM_FILTER_SAMPLES;
 			if (servo_val >= 0.0) {
 				// check if pid needs to be lowered
 				if (servo_val > 0.0) {
 					// needs to be set first ?
-					if (pid_rpm == 0) {
-						pid_rpm = rpm_filtered;
+					if (pid_rpm == 0 && mid_rpm_filtered < mcconf->l_max_erpm) {
+						pid_rpm = mid_rpm_filtered;
 					}
 					
-					if(rpm_filtered > mcconf->s_pid_min_erpm && pid_rpm < config.pid_max_erpm){
-						float diff = pid_rpm - rpm_filtered;
+					if(mid_rpm_filtered > mcconf->s_pid_min_erpm){
+						float diff = pid_rpm - mid_rpm_filtered;
 						if (diff > 1500) {
-							pid_rpm = pid_rpm - 10;
-						}else if(diff > 500 && rpm_filtered < 1500) {
-							pid_rpm = pid_rpm - 10;
+							pid_rpm -= 10;
+						}else if(diff > 500 && mid_rpm_filtered < 1500) {
+							pid_rpm -= 10;
 						}	
 					}else{
 						pid_rpm = 0;
@@ -518,10 +526,7 @@ static THD_FUNCTION(ppm_thread, arg) {
 						current_mode = false;
 						
 						send_pid = true;
-						mc_interface_set_pid_speed(rpm_local + pid_rpm - rpm_filtered);
-						
-						// overwrite mid_rpm
-						mid_rpm = rpm_filtered;
+						mc_interface_set_pid_speed(rpm_local + pid_rpm - mid_rpm);
 
 					} else {
 						servo_val = 0.0;
@@ -529,6 +534,7 @@ static THD_FUNCTION(ppm_thread, arg) {
 					}
 				}else{
 					current = 0.0;
+					servo_val = 0.0;
 				}				
 			} else {
 				current = fabsf(servo_val * mcconf->lo_current_motor_min_now);
@@ -681,7 +687,6 @@ static THD_FUNCTION(ppm_thread, arg) {
 				}
 			}
 		}
-
 	}
 }
 #endif

@@ -357,20 +357,16 @@ static THD_FUNCTION(output_thread, arg) {
 		// get middle rpm
 		mid_rpm /= motor_count;
 		
-		
 		// Filter RPM to avoid glitches
-		static float filter_buffer[RPM_FILTER_SAMPLES];
-		static int filter_ptr = 0;
-		filter_buffer[filter_ptr++] = mid_rpm;
-		if (filter_ptr >= RPM_FILTER_SAMPLES) {
-			filter_ptr = 0;
-		}
-
-		float rpm_filtered = 0.0;
-		for (int i = 0;i < RPM_FILTER_SAMPLES;i++) {
-			rpm_filtered += filter_buffer[i];
-		}
-		rpm_filtered /= RPM_FILTER_SAMPLES;
+		static float rpm_filter_buffer[RPM_FILTER_SAMPLES];
+        static int rpm_filter_ptr = 0;
+        static float rpm_sum = 0.0;
+        
+        //update the array to get the average rpm
+		rpm_sum += mid_rpm - rpm_filter_buffer[rpm_filter_ptr];
+        rpm_filter_buffer[rpm_filter_ptr++] = mid_rpm;
+        if(rpm_filter_ptr == RPM_FILTER_SAMPLES) rpm_filter_ptr = 0;
+        float mid_rpm_filtered = rpm_sum / RPM_FILTER_SAMPLES;		
 
 		if ((config.buttons_mirrored ? chuck_d.bt_z : chuck_d.bt_c)
 			|| (config.ctrl_type == CHUK_CTRL_TYPE_CURRENT_NOREV && (config.buttons_mirrored ? chuck_d.bt_c : chuck_d.bt_z))) {
@@ -381,8 +377,8 @@ static THD_FUNCTION(output_thread, arg) {
 				|| (out_val < -0.1 && !pid_breaking_enabled)
 				|| (config.ctrl_type == CHUK_CTRL_TYPE_CURRENT_NOREV && !pid_breaking_enabled && (config.buttons_mirrored ? chuck_d.bt_c : chuck_d.bt_z))) {
 				// if cruise not activated or (actual filtered speed is less than set cruise speed)
-				if(!was_pid || fabsf(rpm_filtered) > fabsf(pid_rpm)){
-					pid_rpm = rpm_filtered;
+				if(!was_pid || fabsf(mid_rpm_filtered) > fabsf(pid_rpm)){
+					pid_rpm = mid_rpm_filtered;
 
 					if ((is_reverse && pid_rpm > 0.0) || (!is_reverse && pid_rpm < 0.0)) {
 						if (fabsf(pid_rpm) > mcconf->s_pid_min_erpm) {
@@ -433,8 +429,8 @@ static THD_FUNCTION(output_thread, arg) {
 
 					pid_rpm -= (out_val * config.stick_erpm_per_s_in_cc) / ((float)OUTPUT_ITERATION_TIME_MS * 1000.0);
 
-					if (pid_rpm < (rpm_filtered - config.stick_erpm_per_s_in_cc)) {
-						pid_rpm = rpm_filtered - config.stick_erpm_per_s_in_cc;
+					if (pid_rpm < (mid_rpm_filtered - config.stick_erpm_per_s_in_cc)) {
+						pid_rpm = mid_rpm_filtered - config.stick_erpm_per_s_in_cc;
 					}
 				} else {
 					if (pid_rpm < 0.0) {
@@ -443,8 +439,8 @@ static THD_FUNCTION(output_thread, arg) {
 
 					pid_rpm += (out_val * config.stick_erpm_per_s_in_cc) / ((float)OUTPUT_ITERATION_TIME_MS * 1000.0);
 
-					if (pid_rpm > (rpm_filtered + config.stick_erpm_per_s_in_cc)) {
-						pid_rpm = rpm_filtered + config.stick_erpm_per_s_in_cc;
+					if (pid_rpm > (mid_rpm_filtered + config.stick_erpm_per_s_in_cc)) {
+						pid_rpm = mid_rpm_filtered + config.stick_erpm_per_s_in_cc;
 					}
 				}
 			}

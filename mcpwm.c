@@ -669,7 +669,7 @@ void mcpwm_set_current(float current) {
 	}
 	
 	// truncate by the higher value because it also could mean accelerate reverse
-	float max_c = utils_max_abs(conf->l_current_min, conf->l_current_max);
+	float max_c = fabsf(utils_max_abs(conf->l_current_min, conf->l_current_max));
 	
 	utils_truncate_number(&current, -max_c, max_c);
 
@@ -1146,7 +1146,7 @@ static void run_pid_control_speed(void) {
 	static float d_filter = 0.0;
 		// PID is off. Return.
 	if (control_mode != CONTROL_MODE_SPEED) {
-		i_term = 0.0;
+	    i_term = mcpwm_get_tot_current_directional_filtered() / conf->lo_current_max;
 		prev_error = 0.0;
 		d_filter = 0.0;
 		return;

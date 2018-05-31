@@ -601,7 +601,7 @@ void mcpwm_foc_set_current(float current) {
 	}
 	
 	// truncate by the higher value because it also could mean accelerate reverse
-	float max_c = utils_max_abs(m_conf->l_current_min, m_conf->l_current_max);
+	float max_c = fabsf(utils_max_abs(m_conf->l_current_min, m_conf->l_current_max));
 	
 	utils_truncate_number(&current, -max_c, max_c);
 	
@@ -2052,18 +2052,18 @@ static THD_FUNCTION(timer_thread, arg) {
 			started_now = true;
 		}
 
-		if (min_rpm_timer > 0.0) {
-			m_phase_now_observer_override += add_min_speed;
-
+		if (min_rpm_timer > 0.0) {		
 			// When the motor gets stuck it tends to be 90 degrees off, so start the open loop
 			// sequence by correcting with 90 degrees.
 			if (started_now) {
+				m_phase_now_observer_override = m_phase_now_observer;
 				if (m_motor_state.duty_now > 0.0) {
 					m_phase_now_observer_override += M_PI / 2.0;
 				} else {
 					m_phase_now_observer_override -= M_PI / 2.0;
 				}
 			}
+			m_phase_now_observer_override += add_min_speed;
 
 			utils_norm_angle_rad((float*)&m_phase_now_observer_override);
 			m_phase_observer_override = true;
@@ -2453,9 +2453,7 @@ static void svm(float alpha, float beta, uint32_t PWMHalfPeriod,
 static void run_pid_control_pos(float angle_now, float angle_set, float dt) {
 	static float i_term = 0;
 	static float prev_error = 0;
-	float p_term;
-	float d_term;
-
+	
 	// PID is off. Return.
 	if (m_control_mode != CONTROL_MODE_POS) {
 		i_term = 0;
@@ -2472,7 +2470,7 @@ static void run_pid_control_pos(float angle_now, float angle_set, float dt) {
 		}
 	}
 
-	p_term = error * m_conf->p_pid_kp;
+	float p_term = error * m_conf->p_pid_kp;
 	i_term += error * (m_conf->p_pid_ki * dt);
 
 	// Average DT for the D term when the error does not change. This likely
@@ -2481,6 +2479,7 @@ static void run_pid_control_pos(float angle_now, float angle_set, float dt) {
 	// TODO: Are there problems with this approach?
 	static float dt_int = 0.0;
 	dt_int += dt;
+	float d_term;
 	if (error == prev_error) {
 		d_term = 0.0;
 	} else {
@@ -2524,7 +2523,9 @@ static void run_pid_control_speed(float dt) {
 
 	// PID is off. Return.
 	if (m_control_mode != CONTROL_MODE_SPEED) {
-		i_term = 0.0;
+		// use the iterm taht would result in the actual current to keeo the actual momentum when
+		// cruise is activated during acceleration
+		i_term = m_motor_state.iq_filter / m_conf->lo_current_max;
 		prev_error = 0.0;
 		d_filter = 0.0;
 		return;
