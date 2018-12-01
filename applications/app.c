@@ -78,6 +78,12 @@ void app_set_configuration(app_configuration *conf) {
 		app_uartcomm_start();
 		break;
 
+	case APP_PPM_TRANSMISSION:
+		hw_stop_i2c();
+		app_ppm_start();
+		app_transmission_start();
+		break;
+
 	case APP_ADC_UART:
 		hw_stop_i2c();
 		app_adc_start(false);

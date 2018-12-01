@@ -50,6 +50,10 @@ void app_nunchuk_configure(chuk_config *conf);
 float app_nunchuk_get_decoded_chuk(void);
 void app_nunchuk_update_output(chuck_data *data);
 
+void app_transmission_start(void);
+void app_transmission_stop(void);
+void app_transmission_configure(uint32_t erpm);
+
 // Custom apps
 void app_custom_start(void);
 void app_custom_stop(void);
