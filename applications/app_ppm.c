@@ -723,6 +723,8 @@ static THD_FUNCTION(transmission_thread, arg) {
 			chSysLockFromISR();
 			chVTResetI(&vt);
 			chSysUnlockFromISR();
+			// cut power
+			mc_interface_set_current(0);
 			// output signal
 			palWritePad(HW_UART_TX_PORT, HW_UART_TX_PIN, PAL_HIGH);
 			// wait for relay
@@ -739,6 +741,8 @@ static THD_FUNCTION(transmission_thread, arg) {
 				chSysLockFromISR();
 				chVTResetI(&vt);
 				chSysUnlockFromISR();
+				// cut power
+				mc_interface_set_current(0);
 				// output signal
 				palWritePad(HW_UART_TX_PORT, HW_UART_TX_PIN, PAL_LOW);
 				// wait for relay
