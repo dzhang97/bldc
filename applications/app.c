@@ -45,6 +45,7 @@ void app_set_configuration(app_configuration *conf) {
 	app_adc_stop();
 	app_uartcomm_stop();
 	app_nunchuk_stop();
+	app_transmission_stop();
 
 	if (!conf_general_permanent_nrf_found) {
 		nrf_driver_stop();
@@ -116,6 +117,7 @@ void app_set_configuration(app_configuration *conf) {
 	app_adc_configure(&appconf.app_adc_conf);
 	app_uartcomm_configure(appconf.app_uart_baudrate);
 	app_nunchuk_configure(&appconf.app_chuk_conf);
+	app_transmission_configure(appconf.app_transmission_conf.erpm);
 
 #ifdef APP_CUSTOM_TO_USE
 	app_custom_configure(&appconf);

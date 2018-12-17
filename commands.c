@@ -615,6 +615,9 @@ void commands_process_packet(unsigned char *data, unsigned int len) {
 		appconf.app_chuk_conf.tc_offset = buffer_get_float32_auto(data, &ind);
 		appconf.app_chuk_conf.buttons_mirrored = data[ind++];
 		// new config end
+
+		// transmission config
+		appconf.app_transmission_conf.erpm = buffer_get_uint32(data, &ind);
 		
 		conf_general_store_app_configuration(&appconf);
 		app_set_configuration(&appconf);

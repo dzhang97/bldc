@@ -442,6 +442,10 @@ typedef struct {
 } nrf_config;
 
 typedef struct {
+	uint32_t erpm;
+} transmission_config;
+
+typedef struct {
 	// Settings
 	uint8_t controller_id;
 	uint32_t timeout_msec;
@@ -467,6 +471,9 @@ typedef struct {
 
 	// NRF application settings
 	nrf_config app_nrf_conf;
+
+	// Transmission application settings
+	transmission_config app_transmission_conf;
 } app_configuration;
 
 // Communication commands

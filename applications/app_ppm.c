@@ -690,3 +690,68 @@ static THD_FUNCTION(ppm_thread, arg) {
 	}
 }
 #endif
+
+// Transmission Code
+static uint32_t switch_erpm = 100000;
+static bool turbo = false;
+virtual_timer_t* ppm_timer;
+
+static THD_FUNCTION(transmission_thread, arg);
+static THD_WORKING_AREA(transmission_thread_wa, 2048);
+
+void app_transmission_start() {
+	palSetPadMode(HW_UART_TX_PORT, HW_UART_TX_PIN, PAL_MODE_OUTPUT_OPENDRAIN);
+	chThdCreateStatic(transmission_thread_wa, sizeof(transmission_thread_wa), NORMALPRIO, transmission_thread, NULL);
+}
+
+void app_transmission_stop(void) {
+	turbo = false;
+}
+
+void app_transmission_configure(uint32_t erpm) {
+	switch_erpm = erpm;
+}
+
+static THD_FUNCTION(transmission_thread, arg) {
+	(void)arg;
+
+	chRegSetThreadName("APP_TRANSMISSION");
+
+	for (;;) {
+		if (mc_interface_get_rpm() > switch_erpm && !turbo) {
+			// pause thread
+			chSysLockFromISR();
+			chVTResetI(&vt);
+			chSysUnlockFromISR();
+			// output signal
+			palWritePad(HW_UART_TX_PORT, HW_UART_TX_PIN, PAL_HIGH);
+			// wait for relay
+			chThdSleepMilliseconds(25);
+			// resume thread
+			chSysLockFromISR();
+			chVTSetI(&vt, MS2ST(1), update, NULL);
+			chSysUnlockFromISR();
+
+			turbo = true;
+		} else {
+			if (mc_interface_get_rpm() < switch_erpm && turbo) {
+				// pause thread
+				chSysLockFromISR();
+				chVTResetI(&vt);
+				chSysUnlockFromISR();
+				// output signal
+				palWritePad(HW_UART_TX_PORT, HW_UART_TX_PIN, PAL_LOW);
+				// wait for relay
+				chThdSleepMilliseconds(25);
+				// resume thread
+				chSysLockFromISR();
+				chVTSetI(&vt, MS2ST(1), update, NULL);
+				chSysUnlockFromISR();
+
+				turbo = false;
+			}
+		}
+
+		chThdSleepMilliseconds(250);
+	}
+}
