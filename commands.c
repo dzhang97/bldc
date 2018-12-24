@@ -1477,6 +1477,9 @@ void commands_send_appconf(COMM_PACKET_ID packet_id, app_configuration *appconf)
 		
 	// end new config
 
+	// Trnasmission config
+	send_buffer[ind++] = appconf->app_transmission_conf.erpm;
+
 	commands_send_packet(send_buffer, ind);
 }
 

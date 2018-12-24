@@ -255,4 +255,9 @@
 #define APPCONF_NRF_SEND_CRC_ACK			true
 #endif
 
+//Transmission
+#ifndef APPCONF_TRANSMISSION_ERPM
+#define APPCONF_TRANSMISSION_ERPM           150000
+#endif
+
 #endif /* APPCONF_DEFAULT_H_ */

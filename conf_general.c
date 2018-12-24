@@ -169,6 +169,9 @@ void conf_general_get_default_app_configuration(app_configuration *conf) {
 	conf->app_chuk_conf.tc_offset = APPCONF_CHUK_TC_OFFSET;
 	conf->app_chuk_conf.buttons_mirrored = APPCONF_CHUK_BUTTONS_MIRRORED;
 	//new config end
+
+	//Transmission config
+	conf->app_transmission_conf.erpm = APPCONF_TRANSMISSION_ERPM;
 }
 
 /**

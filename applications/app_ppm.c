@@ -60,6 +60,9 @@ static volatile int pulses_without_power = 0;
 static float input_val = 0.0;
 static volatile float direction_hyst = 0;
 
+static uint32_t switch_erpm = 150000; //Transmission variables
+static bool turbo = false;
+
 // Private functions
 static void update(void *p);
 #endif
@@ -283,6 +286,11 @@ static THD_FUNCTION(ppm_thread, arg) {
 				ramp_up_from_timeout = false;
 			}
 			servo_val = servo_val_ramp;			
+		}
+
+		// Apply turbo torque compensation
+		if (turbo) {
+			servo_val = servo_val * 1.7;
 		}
 
 		float current = 0;
@@ -692,10 +700,6 @@ static THD_FUNCTION(ppm_thread, arg) {
 #endif
 
 // Transmission Code
-static uint32_t switch_erpm = 100000;
-static bool turbo = false;
-virtual_timer_t* ppm_timer;
-
 static THD_FUNCTION(transmission_thread, arg);
 static THD_WORKING_AREA(transmission_thread_wa, 2048);
 
